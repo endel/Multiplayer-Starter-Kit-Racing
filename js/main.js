@@ -5,23 +5,23 @@ import { createWorldSettings, createWorld, addBroadphaseLayer, addObjectLayer, e
 import { Vehicle } from './Vehicle.js';
 import { Camera } from './Camera.js';
 import { Controls } from './Controls.js';
-import { buildTrack } from './Track.js';
+import { buildTrack, decodeCells, computeSpawnPosition, computeTrackBounds } from './Track.js';
 import { buildWallColliders, createSphereBody } from './Physics.js';
 import { SmokeTrails } from './Particles.js';
 import { GameAudio } from './Audio.js';
-import GUI from 'lil-gui';
+
 
 const renderer = new THREE.WebGLRenderer( { antialias: true, outputBufferType: THREE.HalfFloatType } );
 renderer.setSize( window.innerWidth, window.innerHeight );
 renderer.setPixelRatio( window.devicePixelRatio );
 renderer.shadowMap.enabled = true;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.75;
+renderer.toneMappingExposure = 1.0;
 
 const bloomPass = new UnrealBloomPass( new THREE.Vector2( window.innerWidth, window.innerHeight ) );
-bloomPass.strength = 0.05;
-bloomPass.radius = 0.05;
-bloomPass.threshold = 0;
+bloomPass.strength = 0.02;
+bloomPass.radius = 0.02;
+bloomPass.threshold = 0.5;
 
 renderer.setEffects( [ bloomPass ] );
 
@@ -31,7 +31,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color( 0xadb2ba );
 scene.fog = new THREE.Fog( 0xadb2ba, 30, 55 );
 
-const dirLight = new THREE.DirectionalLight( 0xffffff, 4 );
+const dirLight = new THREE.DirectionalLight( 0xffffff, 5 );
 dirLight.position.set( 11.4, 15, -5.3 );
 dirLight.castShadow = true;
 dirLight.shadow.mapSize.setScalar( 4096 );
@@ -43,16 +43,9 @@ dirLight.shadow.camera.top = 30;
 dirLight.shadow.camera.bottom = -30;
 scene.add( dirLight );
 
-const hemiLight = new THREE.HemisphereLight( 0xc8d8e8, 0x7a8a5a, 1 );
+const hemiLight = new THREE.HemisphereLight( 0xc8d8e8, 0x7a8a5a, 1.5 );
 scene.add( hemiLight );
 
-const groundGeo = new THREE.PlaneGeometry( 60, 60 );
-const groundMat = new THREE.MeshStandardMaterial( { color: 0x5a8a3a } );
-const ground = new THREE.Mesh( groundGeo, groundMat );
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.51;
-ground.receiveShadow = true;
-scene.add( ground );
 
 window.addEventListener( 'resize', () => {
 
@@ -110,14 +103,43 @@ async function init() {
 	registerAll();
 	await loadModels();
 
-	window.__scene = scene;
-	window.__models = models;
-	window.__vehicle = null;
-	window.__controls = null;
+	const mapParam = new URLSearchParams( window.location.search ).get( 'map' );
+	let customCells = null;
+	let spawnPos = null;
 
-	buildTrack( scene, models );
+	if ( mapParam ) {
 
-	const raycastMeshes = [ ground ];
+		try {
+
+			customCells = decodeCells( mapParam );
+			spawnPos = computeSpawnPosition( customCells );
+
+		} catch ( e ) {
+
+			console.warn( 'Invalid map parameter, using default track' );
+
+		}
+
+	}
+
+	// Compute track bounds and size physics/shadows to fit
+	const bounds = computeTrackBounds( customCells );
+	const hw = bounds.halfWidth;
+	const hd = bounds.halfDepth;
+	const groundSize = Math.max( hw, hd ) * 2 + 20;
+
+	const shadowExtent = Math.max( hw, hd ) + 10;
+	dirLight.shadow.camera.left = - shadowExtent;
+	dirLight.shadow.camera.right = shadowExtent;
+	dirLight.shadow.camera.top = shadowExtent;
+	dirLight.shadow.camera.bottom = - shadowExtent;
+	dirLight.shadow.camera.updateProjectionMatrix();
+
+	scene.fog.near = groundSize * 0.4;
+	scene.fog.far = groundSize * 0.8;
+
+	buildTrack( scene, models, customCells );
+
 
 	const worldSettings = createWorldSettings();
 	worldSettings.gravity = [ 0, - 9.81, 0 ];
@@ -134,42 +156,31 @@ async function init() {
 	world._OL_MOVING = OL_MOVING;
 	world._OL_STATIC = OL_STATIC;
 
-	const debugGroup = new THREE.Group();
-	debugGroup.visible = false;
-	scene.add( debugGroup );
+	buildWallColliders( world, null, customCells );
 
-	const debugMat = new THREE.MeshBasicMaterial( { color: 0x00ff00, wireframe: true } );
-
-	buildWallColliders( world, debugGroup );
-
-	const roadHalfExtents = [ 30, 0.01, 30 ];
+	const roadHalf = groundSize / 2;
 	rigidBody.create( world, {
-		shape: box.create( { halfExtents: roadHalfExtents } ),
+		shape: box.create( { halfExtents: [ roadHalf, 0.01, roadHalf ] } ),
 		motionType: MotionType.STATIC,
 		objectLayer: OL_STATIC,
-		position: [ 0, - 0.125, 0 ],
+		position: [ bounds.centerX, - 0.125, bounds.centerZ ],
 		friction: 5.0,
 		restitution: 0.0,
 	} );
 
-	const roadDebug = new THREE.Mesh(
-		new THREE.BoxGeometry( 60, 0.02, 60 ),
-		debugMat
-	);
-	roadDebug.position.y = - 0.125;
-	debugGroup.add( roadDebug );
-
-	const sphereBody = createSphereBody( world );
-
-	const sphereDebug = new THREE.Mesh(
-		new THREE.SphereGeometry( 0.5, 16, 12 ),
-		debugMat
-	);
-	debugGroup.add( sphereDebug );
+	const sphereBody = createSphereBody( world, spawnPos );
 
 	const vehicle = new Vehicle();
 	vehicle.rigidBody = sphereBody;
 	vehicle.physicsWorld = world;
+
+	if ( spawnPos ) {
+
+		vehicle.spherePos.set( spawnPos[ 0 ], spawnPos[ 1 ], spawnPos[ 2 ] );
+		vehicle.prevModelPos.set( spawnPos[ 0 ], 0, spawnPos[ 2 ] );
+
+	}
+
 	const vehicleGroup = vehicle.init( models[ 'vehicle-truck-yellow' ] );
 	scene.add( vehicleGroup );
 
@@ -179,18 +190,11 @@ async function init() {
 	cam.targetPosition.copy( vehicle.spherePos );
 
 	const controls = new Controls();
-	window.__vehicle = vehicle;
-	window.__controls = controls;
-	window.__cam = cam;
-	window.__world = world;
 
 	const particles = new SmokeTrails( scene );
 
 	const audio = new GameAudio();
 	audio.init( cam.camera );
-
-	const gui = new GUI();
-	gui.add( debugGroup, 'visible' ).name( 'Debug Physics' );
 
 	const _forward = new THREE.Vector3();
 
@@ -222,9 +226,7 @@ async function init() {
 
 		updateWorld( world, contactListener, dt );
 
-		vehicle.update( dt, input, raycastMeshes );
-
-		sphereDebug.position.copy( vehicle.spherePos );
+		vehicle.update( dt, input );
 
 		dirLight.position.set(
 			vehicle.spherePos.x + 11.4,

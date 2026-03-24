@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Track Editor</title>
+	<style>
+		* { box-sizing: border-box; }
+		body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+		canvas { display: block; }
+
+		#toolbar {
+			position: absolute;
+			bottom: 20px;
+			left: 50%;
+			transform: translateX(-50%);
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 8px 10px;
+			background: rgba(20, 20, 30, 0.85);
+			backdrop-filter: blur(12px);
+			-webkit-backdrop-filter: blur(12px);
+			border-radius: 14px;
+			border: 1px solid rgba(255, 255, 255, 0.1);
+			box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+			z-index: 10;
+		}
+
+		#toolbar button {
+			padding: 8px 16px;
+			border: none;
+			border-radius: 8px;
+			background: transparent;
+			color: rgba(255, 255, 255, 0.65);
+			font-size: 13px;
+			font-weight: 500;
+			cursor: pointer;
+			transition: all 0.15s;
+			white-space: nowrap;
+		}
+		#toolbar button:hover {
+			background: rgba(255, 255, 255, 0.1);
+			color: #fff;
+		}
+		#toolbar button.active {
+			background: rgba(255, 255, 255, 0.18);
+			color: #fff;
+		}
+
+		.separator {
+			width: 1px;
+			height: 24px;
+			background: rgba(255, 255, 255, 0.15);
+			margin: 0 2px;
+			flex-shrink: 0;
+		}
+
+		#toolbar button.action {
+			background: rgba(80, 180, 80, 0.25);
+			color: rgba(140, 255, 140, 0.9);
+		}
+		#toolbar button.action:hover {
+			background: rgba(80, 180, 80, 0.4);
+			color: #fff;
+		}
+
+		#toolbar button.danger {
+			color: rgba(255, 255, 255, 0.45);
+		}
+		#toolbar button.danger:hover {
+			background: rgba(220, 80, 80, 0.25);
+			color: rgba(255, 140, 140, 0.9);
+		}
+
+		#toast {
+			position: absolute;
+			bottom: 90px;
+			left: 50%;
+			transform: translateX(-50%);
+			padding: 10px 24px;
+			background: rgba(20, 20, 30, 0.85);
+			backdrop-filter: blur(12px);
+			-webkit-backdrop-filter: blur(12px);
+			color: #fff;
+			border-radius: 10px;
+			border: 1px solid rgba(255, 255, 255, 0.1);
+			font-size: 13px;
+			opacity: 0;
+			transition: opacity 0.3s;
+			pointer-events: none;
+			z-index: 20;
+		}
+		#toast.show { opacity: 1; }
+
+		#help {
+			position: absolute;
+			top: 16px;
+			left: 50%;
+			transform: translateX(-50%);
+			color: rgba(255, 255, 255, 0.7);
+			font-size: 13px;
+			font-weight: 500;
+			z-index: 10;
+			pointer-events: none;
+			white-space: nowrap;
+			background: rgba(20, 20, 30, 0.6);
+			backdrop-filter: blur(12px);
+			-webkit-backdrop-filter: blur(12px);
+			padding: 8px 18px;
+			border-radius: 10px;
+			border: 1px solid rgba(255, 255, 255, 0.08);
+		}
+	</style>
+	<script type="importmap">
+	{
+		"imports": {
+			"three": "https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js",
+			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/"
+		}
+	}
+	</script>
+</head>
+<body>
+	<div id="toolbar">
+		<button id="btn-road" class="active">Road</button>
+		<button id="btn-finish">Start/Finish</button>
+		<button id="btn-erase">Erase</button>
+		<div class="separator"></div>
+		<button id="btn-play" class="action">Play</button>
+		<button id="btn-share" class="action">Share</button>
+		<div class="separator"></div>
+		<button id="btn-clear" class="danger">Clear</button>
+	</div>
+
+	<div id="toast"></div>
+	<div id="help">Click/drag: draw &nbsp; Right-click: erase &nbsp; Space+drag: pan &nbsp; Pinch: zoom</div>
+
+	<script type="module">
+	import * as THREE from 'three';
+	import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+	import { ORIENT_DEG, CELL_RAW, GRID_SCALE, encodeCells, decodeCells } from './js/Track.js';
+
+	// ─── Auto-tile lookup ─────────────────────────────────────
+	// Bitmask: N=8 S=4 E=2 W=1
+	// Corner connectivity: 0°=S+W, 90°=S+E, 180°=N+E, 270°=N+W
+
+	const AUTOTILE = [
+		[ 'track-straight', 0 ],    //  0: isolated
+		[ 'track-straight', 16 ],   //  1: W
+		[ 'track-straight', 16 ],   //  2: E
+		[ 'track-straight', 16 ],   //  3: E+W
+		[ 'track-straight', 0 ],    //  4: S
+		[ 'track-corner',   0 ],    //  5: S+W
+		[ 'track-corner',   16 ],   //  6: S+E
+		[ 'track-straight', 16 ],   //  7: S+E+W
+		[ 'track-straight', 0 ],    //  8: N
+		[ 'track-corner',   22 ],   //  9: N+W
+		[ 'track-corner',   10 ],   // 10: N+E
+		[ 'track-straight', 16 ],   // 11: N+E+W
+		[ 'track-straight', 0 ],    // 12: N+S
+		[ 'track-straight', 0 ],    // 13: N+S+W
+		[ 'track-straight', 0 ],    // 14: N+S+E
+		[ 'track-straight', 0 ],    // 15: N+S+E+W
+	];
+
+	// ─── State ────────────────────────────────────────────────
+
+	const grid = new Map(); // "gx,gz" → { type, orient, isFinish, mesh }
+	let tool = 'road'; // 'road', 'finish', 'erase'
+
+	function cellKey( gx, gz ) { return gx + ',' + gz; }
+
+	// ─── Renderer ─────────────────────────────────────────────
+
+	const renderer = new THREE.WebGLRenderer( { antialias: true } );
+	renderer.setSize( window.innerWidth, window.innerHeight );
+	renderer.setPixelRatio( window.devicePixelRatio );
+	renderer.shadowMap.enabled = true;
+	renderer.toneMapping = THREE.ACESFilmicToneMapping;
+	renderer.toneMappingExposure = 1.0;
+	document.body.appendChild( renderer.domElement );
+
+	// ─── Scene ────────────────────────────────────────────────
+
+	const scene = new THREE.Scene();
+	scene.background = new THREE.Color( 0xadb2ba );
+	scene.fog = new THREE.Fog( 0xadb2ba, 80, 160 );
+
+	const dirLight = new THREE.DirectionalLight( 0xffffff, 5 );
+	dirLight.position.set( 11.4, 15, - 5.3 );
+	dirLight.castShadow = true;
+	dirLight.shadow.mapSize.setScalar( 4096 );
+	dirLight.shadow.camera.near = 0.5;
+	dirLight.shadow.camera.far = 100;
+	dirLight.shadow.camera.left = - 60;
+	dirLight.shadow.camera.right = 60;
+	dirLight.shadow.camera.top = 60;
+	dirLight.shadow.camera.bottom = - 60;
+	scene.add( dirLight );
+
+	const hemiLight = new THREE.HemisphereLight( 0xc8d8e8, 0x7a8a5a, 1.5 );
+	scene.add( hemiLight );
+
+	// Ground
+	const groundMat = new THREE.MeshStandardMaterial( { color: 0x369069, metalness: 0 } );
+	const ground = new THREE.Mesh( new THREE.PlaneGeometry( 200, 200 ), groundMat );
+	ground.rotation.x = - Math.PI / 2;
+	ground.position.y = - 0.14;
+	ground.receiveShadow = true;
+	scene.add( ground );
+
+	// Grid helper
+	const gridSize = 30;
+	const cellWorld = CELL_RAW * GRID_SCALE;
+	const gridHelper = new THREE.GridHelper( gridSize * cellWorld, gridSize, 0x4a7a2a, 0x4a7a2a );
+	gridHelper.position.y = - 0.49;
+	gridHelper.material.opacity = 0.3;
+	gridHelper.material.transparent = true;
+	scene.add( gridHelper );
+
+	// Track group (mirrors game structure)
+	const trackGroup = new THREE.Group();
+	trackGroup.position.y = - 0.5;
+	trackGroup.scale.setScalar( GRID_SCALE );
+	scene.add( trackGroup );
+
+	// Ghost preview group
+	const ghostGroup = new THREE.Group();
+	ghostGroup.position.y = - 0.5;
+	ghostGroup.scale.setScalar( GRID_SCALE );
+	scene.add( ghostGroup );
+	let ghostMesh = null;
+
+	// ─── Camera (orthographic, top-down) ──────────────────────
+
+	const frustum = 30;
+	const aspect = window.innerWidth / window.innerHeight;
+	const camera = new THREE.OrthographicCamera(
+		- frustum * aspect, frustum * aspect,
+		frustum, - frustum,
+		0.1, 200
+	);
+	const cellCenter = 0.5 * CELL_RAW * GRID_SCALE;
+	camera.position.set( cellCenter, 50, cellCenter );
+	camera.lookAt( cellCenter, 0, cellCenter );
+
+	const camTarget = new THREE.Vector3( cellCenter, 0, cellCenter );
+
+	window.addEventListener( 'resize', () => {
+
+		const a = window.innerWidth / window.innerHeight;
+		camera.left = - frustum * a;
+		camera.right = frustum * a;
+		camera.updateProjectionMatrix();
+		renderer.setSize( window.innerWidth, window.innerHeight );
+
+	} );
+
+	// ─── Load models ──────────────────────────────────────────
+
+	const loader = new GLTFLoader();
+	const modelNames = [ 'track-straight', 'track-corner', 'track-bump', 'track-finish' ];
+	const models = {};
+
+	async function loadModels() {
+
+		const promises = modelNames.map( ( name ) =>
+			new Promise( ( resolve, reject ) => {
+
+				loader.load( `models/${ name }.glb`, ( gltf ) => {
+
+					gltf.scene.traverse( ( child ) => {
+
+						if ( child.isMesh ) child.material.side = THREE.FrontSide;
+
+					} );
+
+					models[ name ] = gltf.scene;
+					resolve();
+
+				}, undefined, reject );
+
+			} )
+		);
+
+		await Promise.all( promises );
+
+	}
+
+	// ─── Auto-tile resolve ────────────────────────────────────
+
+	// Exit bitmask for each piece type/orient
+	// Bits: N=8 S=4 E=2 W=1
+	function getCellExits( cell ) {
+
+		const t = cell.type;
+		const o = cell.orient;
+
+		if ( t === 'track-corner' ) {
+
+			if ( o === 0 ) return 5;    // S+W
+			if ( o === 16 ) return 6;   // S+E
+			if ( o === 10 ) return 10;  // N+E
+			if ( o === 22 ) return 9;   // N+W
+
+		}
+
+		// Straight, finish, bump — all symmetric
+		if ( o === 0 || o === 10 ) return 12; // N+S
+		return 3; // E+W
+
+	}
+
+	// Check which neighbors have a road exit facing toward this cell
+	function getConnectivityMask( gx, gz ) {
+
+		let mask = 0;
+
+		// N neighbor has S exit?
+		const n = grid.get( cellKey( gx, gz - 1 ) );
+		if ( n && ( getCellExits( n ) & 4 ) ) mask |= 8;
+
+		// S neighbor has N exit?
+		const s = grid.get( cellKey( gx, gz + 1 ) );
+		if ( s && ( getCellExits( s ) & 8 ) ) mask |= 4;
+
+		// E neighbor has W exit?
+		const e = grid.get( cellKey( gx + 1, gz ) );
+		if ( e && ( getCellExits( e ) & 1 ) ) mask |= 2;
+
+		// W neighbor has E exit?
+		const w = grid.get( cellKey( gx - 1, gz ) );
+		if ( w && ( getCellExits( w ) & 2 ) ) mask |= 1;
+
+		return mask;
+
+	}
+
+	// Raw presence mask (any road in adjacent cell)
+	function getPresenceMask( gx, gz ) {
+
+		let mask = 0;
+		if ( grid.has( cellKey( gx, gz - 1 ) ) ) mask |= 8;
+		if ( grid.has( cellKey( gx, gz + 1 ) ) ) mask |= 4;
+		if ( grid.has( cellKey( gx + 1, gz ) ) ) mask |= 2;
+		if ( grid.has( cellKey( gx - 1, gz ) ) ) mask |= 1;
+		return mask;
+
+	}
+
+	// Count bits in a 4-bit mask
+	function bitCount( mask ) {
+
+		return ( mask >> 3 & 1 ) + ( mask >> 2 & 1 ) + ( mask >> 1 & 1 ) + ( mask & 1 );
+
+	}
+
+	// Count how many of a cell's exits are connected to neighbors
+	function connectedExitCount( gx, gz ) {
+
+		const cell = grid.get( cellKey( gx, gz ) );
+		if ( ! cell ) return 0;
+		return bitCount( getCellExits( cell ) & getConnectivityMask( gx, gz ) );
+
+	}
+
+	// When a new cell has 3+ neighbors, pick the best pair to connect.
+	// Prefer corners over straights, then prefer neighbors with more existing connections.
+	const DIR_INFO = [
+		{ bit: 8, dx: 0, dz: - 1 }, // N
+		{ bit: 4, dx: 0, dz: 1 },   // S
+		{ bit: 2, dx: 1, dz: 0 },   // E
+		{ bit: 1, dx: - 1, dz: 0 }, // W
+	];
+
+	function pickBestPair( mask, gx, gz ) {
+
+		const active = DIR_INFO.filter( d => mask & d.bit );
+		if ( active.length <= 2 ) return mask;
+
+		let bestMask = active[ 0 ].bit | active[ 1 ].bit;
+		let bestScore = - 1;
+		let bestIsCorner = false;
+
+		for ( let i = 0; i < active.length; i ++ ) {
+
+			for ( let j = i + 1; j < active.length; j ++ ) {
+
+				const pairMask = active[ i ].bit | active[ j ].bit;
+				const isCorner = ( pairMask !== 3 && pairMask !== 12 ); // not E+W or N+S
+
+				const s1 = connectedExitCount( gx + active[ i ].dx, gz + active[ i ].dz );
+				const s2 = connectedExitCount( gx + active[ j ].dx, gz + active[ j ].dz );
+				const score = s1 + s2;
+
+				if ( ( isCorner && ! bestIsCorner ) ||
+					( isCorner === bestIsCorner && score > bestScore ) ) {
+
+					bestMask = pairMask;
+					bestScore = score;
+					bestIsCorner = isCorner;
+
+				}
+
+			}
+
+		}
+
+		return bestMask;
+
+	}
+
+	// Resolve tile for new cells: use presence mask, pick best pair if 3+
+	function resolveNewTile( gx, gz ) {
+
+		const pMask = getPresenceMask( gx, gz );
+
+		if ( bitCount( pMask ) >= 3 ) {
+
+			return AUTOTILE[ pickBestPair( pMask, gx, gz ) ];
+
+		}
+
+		return AUTOTILE[ pMask ];
+
+	}
+
+	function resolveTile( gx, gz ) {
+
+		const cMask = getConnectivityMask( gx, gz );
+
+		// If any neighbor connects toward us, use connectivity-based auto-tile
+		if ( cMask !== 0 ) return AUTOTILE[ cMask ];
+
+		// No neighbor connects toward us — orient parallel to nearest road
+		const pMask = getPresenceMask( gx, gz );
+		if ( pMask !== 0 ) {
+
+			// Find any adjacent road cell and match its direction
+			const dirs = [ [ 0, - 1, 8 ], [ 0, 1, 4 ], [ 1, 0, 2 ], [ - 1, 0, 1 ] ];
+			for ( const [ dx, dz, bit ] of dirs ) {
+
+				if ( ! ( pMask & bit ) ) continue;
+				const neighbor = grid.get( cellKey( gx + dx, gz + dz ) );
+				if ( ! neighbor ) continue;
+
+				const exits = getCellExits( neighbor );
+				// Match the neighbor's running direction
+				if ( exits & 12 ) return [ 'track-straight', 0 ];  // neighbor runs N-S
+				if ( exits & 3 ) return [ 'track-straight', 16 ];  // neighbor runs E-W
+
+			}
+
+		}
+
+		return AUTOTILE[ 0 ]; // isolated default
+
+	}
+
+	function resolveCell( gx, gz ) {
+
+		const key = cellKey( gx, gz );
+		const cell = grid.get( key );
+		if ( ! cell ) return;
+
+		let baseType, orient;
+
+		if ( ! cell.mesh ) {
+
+			// New cell: connect to neighbors, pick best pair if 3+
+			[ baseType, orient ] = resolveNewTile( gx, gz );
+
+		} else {
+
+			// Existing cell: check if both exits are already connected.
+			// If so, don't change — avoid breaking existing connections.
+			const currentExits = getCellExits( cell );
+			const cMask = getConnectivityMask( gx, gz );
+			const connectedExits = currentExits & cMask;
+			const connectedCount = ( connectedExits >> 3 & 1 ) + ( connectedExits >> 2 & 1 )
+				+ ( connectedExits >> 1 & 1 ) + ( connectedExits & 1 );
+
+			if ( connectedCount >= 2 ) return; // fully connected, don't change
+
+			// Has a free exit — re-resolve to pick up new connection
+			[ baseType, orient ] = resolveTile( gx, gz );
+
+		}
+
+		// Finish cells use track-finish but only when resolved as straight
+		const type = ( cell.isFinish && baseType === 'track-straight' ) ? 'track-finish' : baseType;
+
+		// Skip if nothing changed and mesh already exists
+		if ( cell.type === type && cell.orient === orient && cell.mesh ) return;
+
+		cell.type = type;
+		cell.orient = orient;
+
+		// Update 3D mesh
+		if ( cell.mesh ) {
+
+			trackGroup.remove( cell.mesh );
+
+		}
+
+		const src = models[ type ];
+		if ( ! src ) return;
+
+		const mesh = src.clone();
+		mesh.position.set( ( gx + 0.5 ) * CELL_RAW, 0.5, ( gz + 0.5 ) * CELL_RAW );
+
+		const deg = ORIENT_DEG[ orient ] || 0;
+		mesh.rotation.y = THREE.MathUtils.degToRad( deg );
+
+		mesh.traverse( ( c ) => {
+
+			if ( c.isMesh ) {
+
+				c.castShadow = true;
+				c.receiveShadow = true;
+
+			}
+
+		} );
+
+		trackGroup.add( mesh );
+		cell.mesh = mesh;
+
+	}
+
+	function resolveCellAndNeighbors( gx, gz ) {
+
+		resolveCell( gx, gz );
+		resolveCell( gx, gz - 1 );
+		resolveCell( gx, gz + 1 );
+		resolveCell( gx + 1, gz );
+		resolveCell( gx - 1, gz );
+
+	}
+
+	// ─── Cell operations ──────────────────────────────────────
+
+	function placeRoad( gx, gz, isFinish ) {
+
+		const key = cellKey( gx, gz );
+
+		// If placing a finish, remove finish flag from the old finish cell
+		if ( isFinish ) {
+
+			for ( const [ k, c ] of grid ) {
+
+				if ( c.isFinish && k !== key ) {
+
+					c.isFinish = false;
+					const [ ox, oz ] = k.split( ',' ).map( Number );
+					resolveCell( ox, oz );
+
+				}
+
+			}
+
+		}
+
+		if ( grid.has( key ) ) {
+
+			const cell = grid.get( key );
+
+			if ( isFinish && ! cell.isFinish ) {
+
+				cell.isFinish = true;
+				resolveCellAndNeighbors( gx, gz );
+				save();
+
+			}
+
+			return;
+
+		}
+
+		grid.set( key, { type: 'track-straight', orient: 0, isFinish: !! isFinish, mesh: null } );
+		resolveCellAndNeighbors( gx, gz );
+		save();
+
+	}
+
+	function eraseRoad( gx, gz ) {
+
+		const key = cellKey( gx, gz );
+		if ( ! grid.has( key ) ) return;
+
+		const cell = grid.get( key );
+		if ( cell.mesh ) trackGroup.remove( cell.mesh );
+		grid.delete( key );
+
+		// Re-resolve neighbors
+		resolveCell( gx, gz - 1 );
+		resolveCell( gx, gz + 1 );
+		resolveCell( gx + 1, gz );
+		resolveCell( gx - 1, gz );
+
+		save();
+
+	}
+
+	function clearAll() {
+
+		for ( const [ , cell ] of grid ) {
+
+			if ( cell.mesh ) trackGroup.remove( cell.mesh );
+
+		}
+
+		grid.clear();
+		placeRoad( 0, 0, true );
+		save();
+
+	}
+
+	// ─── Ghost preview ────────────────────────────────────────
+
+	// Neighbor cells whose meshes are temporarily swapped during ghost preview
+	const ghostNeighborBackups = []; // { cell, originalMesh }
+
+	function addGhostPiece( type, orient, gx, gz, opacity ) {
+
+		const src = models[ type ];
+		if ( ! src ) return;
+
+		const mesh = src.clone();
+		mesh.position.set( ( gx + 0.5 ) * CELL_RAW, 0.5, ( gz + 0.5 ) * CELL_RAW );
+
+		const deg = ORIENT_DEG[ orient ] || 0;
+		mesh.rotation.y = THREE.MathUtils.degToRad( deg );
+
+		mesh.traverse( ( c ) => {
+
+			if ( c.isMesh ) {
+
+				c.material = c.material.clone();
+				c.material.transparent = true;
+				c.material.opacity = opacity;
+
+			}
+
+		} );
+
+		ghostGroup.add( mesh );
+
+	}
+
+	function updateGhost( gx, gz ) {
+
+		clearGhost();
+
+		if ( tool === 'erase' ) return;
+
+		const key = cellKey( gx, gz );
+		if ( grid.has( key ) ) return; // already occupied
+
+		// Temporarily insert ghost cell into grid
+		const isFinish = ( tool === 'finish' );
+		const ghostCell = { type: 'track-straight', orient: 0, isFinish, mesh: null };
+		grid.set( key, ghostCell );
+
+		// Resolve ghost: connect to neighbors, pick best pair if 3+
+		const [ baseType, orient ] = resolveNewTile( gx, gz );
+		const type = ( isFinish && baseType === 'track-straight' ) ? 'track-finish' : baseType;
+
+		// Update ghost cell in grid so neighbors see its correct exits
+		ghostCell.type = type;
+		ghostCell.orient = orient;
+
+		// Show ghost piece
+		addGhostPiece( type, orient, gx, gz, 0.4 );
+
+		// Check how neighbors would change and preview those changes
+		const neighbors = [ [ gx, gz - 1 ], [ gx, gz + 1 ], [ gx + 1, gz ], [ gx - 1, gz ] ];
+
+		for ( const [ nx, nz ] of neighbors ) {
+
+			const nKey = cellKey( nx, nz );
+			const nCell = grid.get( nKey );
+			if ( ! nCell ) continue;
+
+			// Skip neighbors that are already fully connected
+			const nExits = getCellExits( nCell );
+			const nConn = getConnectivityMask( nx, nz );
+			const connected = nExits & nConn;
+			const connCount = ( connected >> 3 & 1 ) + ( connected >> 2 & 1 )
+				+ ( connected >> 1 & 1 ) + ( connected & 1 );
+			if ( connCount >= 2 ) continue;
+
+			const [ newType, newOrient ] = resolveTile( nx, nz );
+			const finalType = ( nCell.isFinish && newType === 'track-straight' ) ? 'track-finish' : newType;
+
+			if ( finalType !== nCell.type || newOrient !== nCell.orient ) {
+
+				// Hide the real mesh temporarily
+				if ( nCell.mesh ) {
+
+					nCell.mesh.visible = false;
+					ghostNeighborBackups.push( { cell: nCell } );
+
+				}
+
+				// Show preview of what the neighbor would become
+				addGhostPiece( finalType, newOrient, nx, nz, 0.7 );
+
+			}
+
+		}
+
+		// Remove the temporary ghost cell from the grid
+		grid.delete( key );
+
+	}
+
+	function clearGhost() {
+
+		// Restore hidden neighbor meshes
+		for ( const { cell } of ghostNeighborBackups ) {
+
+			if ( cell.mesh ) cell.mesh.visible = true;
+
+		}
+
+		ghostNeighborBackups.length = 0;
+
+		// Remove all ghost preview meshes
+		while ( ghostGroup.children.length > 0 ) {
+
+			ghostGroup.remove( ghostGroup.children[ 0 ] );
+
+		}
+
+	}
+
+	// ─── Raycasting ───────────────────────────────────────────
+
+	const raycaster = new THREE.Raycaster();
+	const mouse = new THREE.Vector2();
+	let hoveredCell = null;
+
+	function screenToGrid( clientX, clientY ) {
+
+		mouse.x = ( clientX / window.innerWidth ) * 2 - 1;
+		mouse.y = - ( clientY / window.innerHeight ) * 2 + 1;
+
+		raycaster.setFromCamera( mouse, camera );
+
+		const plane = new THREE.Plane( new THREE.Vector3( 0, 1, 0 ), 0.51 );
+		const hit = new THREE.Vector3();
+		raycaster.ray.intersectPlane( plane, hit );
+
+		if ( ! hit ) return null;
+
+		const gx = Math.floor( hit.x / cellWorld );
+		const gz = Math.floor( hit.z / cellWorld );
+
+		return { gx, gz };
+
+	}
+
+	// ─── Persistence ──────────────────────────────────────────
+
+	function save() {
+
+		const arr = [];
+		for ( const [ key, cell ] of grid ) {
+
+			const [ gx, gz ] = key.split( ',' ).map( Number );
+			arr.push( [ gx, gz, cell.type, cell.orient ] );
+
+		}
+
+		const encoded = encodeCells( arr );
+		localStorage.setItem( 'racing-editor-cells', encoded );
+
+	}
+
+	function loadSaved() {
+
+		const params = new URLSearchParams( window.location.search );
+		const mapParam = params.get( 'map' );
+		const encoded = mapParam || localStorage.getItem( 'racing-editor-cells' );
+
+		if ( ! encoded ) return;
+
+		try {
+
+			const arr = decodeCells( encoded );
+
+			for ( const [ gx, gz, type, orient ] of arr ) {
+
+				const isFinish = ( type === 'track-finish' );
+
+				const src = models[ type ];
+				if ( ! src ) continue;
+
+				const mesh = src.clone();
+				mesh.position.set( ( gx + 0.5 ) * CELL_RAW, 0.5, ( gz + 0.5 ) * CELL_RAW );
+				mesh.rotation.y = THREE.MathUtils.degToRad( ORIENT_DEG[ orient ] || 0 );
+				mesh.traverse( ( c ) => {
+
+					if ( c.isMesh ) {
+
+						c.castShadow = true;
+						c.receiveShadow = true;
+
+					}
+
+				} );
+
+				trackGroup.add( mesh );
+				grid.set( cellKey( gx, gz ), { type, orient, isFinish, mesh } );
+
+			}
+
+		} catch ( e ) {
+
+			console.warn( 'Failed to load saved map', e );
+
+		}
+
+	}
+
+	// ─── Toast ────────────────────────────────────────────────
+
+	let toastTimer = 0;
+
+	function showToast( msg ) {
+
+		const el = document.getElementById( 'toast' );
+		el.textContent = msg;
+		el.classList.add( 'show' );
+		clearTimeout( toastTimer );
+		toastTimer = setTimeout( () => el.classList.remove( 'show' ), 2000 );
+
+	}
+
+	// ─── Toolbar ──────────────────────────────────────────────
+
+	const btnRoad = document.getElementById( 'btn-road' );
+	const btnFinish = document.getElementById( 'btn-finish' );
+	const btnErase = document.getElementById( 'btn-erase' );
+
+	function selectTool( t ) {
+
+		tool = t;
+		btnRoad.classList.toggle( 'active', t === 'road' );
+		btnFinish.classList.toggle( 'active', t === 'finish' );
+		btnErase.classList.toggle( 'active', t === 'erase' );
+
+	}
+
+	btnRoad.addEventListener( 'click', () => selectTool( 'road' ) );
+	btnFinish.addEventListener( 'click', () => selectTool( 'finish' ) );
+	btnErase.addEventListener( 'click', () => selectTool( 'erase' ) );
+
+	function getCellsArray() {
+
+		const arr = [];
+		for ( const [ key, cell ] of grid ) {
+
+			const [ gx, gz ] = key.split( ',' ).map( Number );
+			arr.push( [ gx, gz, cell.type, cell.orient ] );
+
+		}
+
+		return arr;
+
+	}
+
+	document.getElementById( 'btn-play' ).addEventListener( 'click', () => {
+
+		if ( grid.size === 0 ) {
+
+			showToast( 'Draw some road first!' );
+			return;
+
+		}
+
+		const encoded = encodeCells( getCellsArray() );
+		window.open( 'index.html?map=' + encoded, '_blank' );
+
+	} );
+
+	document.getElementById( 'btn-share' ).addEventListener( 'click', () => {
+
+		if ( grid.size === 0 ) {
+
+			showToast( 'Draw some road first!' );
+			return;
+
+		}
+
+		const encoded = encodeCells( getCellsArray() );
+		const base = window.location.href.replace( /editor\.html.*/, '' );
+		const url = base + 'index.html?map=' + encoded;
+
+		navigator.clipboard.writeText( url ).then( () => {
+
+			showToast( 'Link copied to clipboard!' );
+
+		} ).catch( () => {
+
+			showToast( url );
+
+		} );
+
+	} );
+
+	document.getElementById( 'btn-clear' ).addEventListener( 'click', () => {
+
+		clearAll();
+		showToast( 'Track cleared' );
+
+	} );
+
+	// ─── Input ────────────────────────────────────────────────
+
+	let isPanning = false;
+	let isSpacePanning = false;
+	let isDrawing = false;
+	let isErasing = false;
+	let panStart = { x: 0, y: 0 };
+	let camStart = { x: 0, z: 0 };
+	let lastDrawCell = null;
+	let spaceDown = false;
+
+	renderer.domElement.addEventListener( 'contextmenu', ( e ) => e.preventDefault() );
+
+	function handleDraw( clientX, clientY ) {
+
+		const cell = screenToGrid( clientX, clientY );
+		if ( ! cell ) return;
+
+		// Skip if same cell as last draw
+		if ( lastDrawCell && lastDrawCell.gx === cell.gx && lastDrawCell.gz === cell.gz ) return;
+		lastDrawCell = cell;
+
+		if ( isErasing ) {
+
+			eraseRoad( cell.gx, cell.gz );
+
+		} else if ( isDrawing ) {
+
+			placeRoad( cell.gx, cell.gz, tool === 'finish' );
+
+		}
+
+	}
+
+	function startPan( e ) {
+
+		isPanning = true;
+		panStart.x = e.clientX;
+		panStart.y = e.clientY;
+		camStart.x = camTarget.x;
+		camStart.z = camTarget.z;
+		renderer.domElement.style.cursor = 'grabbing';
+
+	}
+
+	renderer.domElement.addEventListener( 'mousedown', ( e ) => {
+
+		// Middle mouse, ctrl+left, or space+left for panning
+		if ( e.button === 1 || ( e.button === 0 && ( e.ctrlKey || e.metaKey || spaceDown ) ) ) {
+
+			startPan( e );
+			e.preventDefault();
+			return;
+
+		}
+
+		if ( e.button === 0 ) {
+
+			if ( tool === 'erase' ) {
+
+				isErasing = true;
+
+			} else {
+
+				isDrawing = true;
+
+			}
+
+			lastDrawCell = null;
+			handleDraw( e.clientX, e.clientY );
+
+		} else if ( e.button === 2 ) {
+
+			isErasing = true;
+			lastDrawCell = null;
+			handleDraw( e.clientX, e.clientY );
+
+		}
+
+	} );
+
+	renderer.domElement.addEventListener( 'mousemove', ( e ) => {
+
+		if ( isPanning ) {
+
+			const zoom = camera.zoom;
+			const dx = ( e.clientX - panStart.x ) / window.innerWidth * frustum * 2 * ( window.innerWidth / window.innerHeight ) / zoom;
+			const dz = ( e.clientY - panStart.y ) / window.innerHeight * frustum * 2 / zoom;
+
+			camTarget.x = camStart.x - dx;
+			camTarget.z = camStart.z - dz;
+
+			camera.position.x = camTarget.x;
+			camera.position.z = camTarget.z;
+			camera.lookAt( camTarget.x, 0, camTarget.z );
+			return;
+
+		}
+
+		if ( isDrawing || isErasing ) {
+
+			handleDraw( e.clientX, e.clientY );
+			return;
+
+		}
+
+		const cell = screenToGrid( e.clientX, e.clientY );
+		if ( cell ) {
+
+			hoveredCell = cell;
+			updateGhost( cell.gx, cell.gz );
+
+		} else {
+
+			hoveredCell = null;
+			clearGhost();
+
+		}
+
+	} );
+
+	window.addEventListener( 'mouseup', () => {
+
+		isPanning = false;
+		isDrawing = false;
+		isErasing = false;
+		lastDrawCell = null;
+		renderer.domElement.style.cursor = spaceDown ? 'grab' : '';
+
+	} );
+
+	renderer.domElement.addEventListener( 'wheel', ( e ) => {
+
+		e.preventDefault();
+
+		// Pinch-to-zoom (ctrlKey is set by trackpad pinch)
+		if ( e.ctrlKey ) {
+
+			const zoomSpeed = 1.02;
+			if ( e.deltaY > 0 ) {
+
+				camera.zoom /= zoomSpeed;
+
+			} else {
+
+				camera.zoom *= zoomSpeed;
+
+			}
+
+			camera.zoom = Math.max( 0.1, Math.min( 10, camera.zoom ) );
+			camera.updateProjectionMatrix();
+
+		} else {
+
+			// Two-finger pan
+			const scale = frustum * 2 / window.innerHeight / camera.zoom;
+			camTarget.x += e.deltaX * scale;
+			camTarget.z += e.deltaY * scale;
+
+			camera.position.x = camTarget.x;
+			camera.position.z = camTarget.z;
+			camera.lookAt( camTarget.x, 0, camTarget.z );
+
+		}
+
+	}, { passive: false } );
+
+	window.addEventListener( 'keydown', ( e ) => {
+
+		if ( e.key === ' ' ) {
+
+			if ( ! spaceDown ) {
+
+				spaceDown = true;
+				renderer.domElement.style.cursor = 'grab';
+
+			}
+
+			e.preventDefault();
+
+		} else if ( e.key === '1' ) {
+
+			selectTool( 'road' );
+
+		} else if ( e.key === '2' ) {
+
+			selectTool( 'finish' );
+
+		} else if ( e.key === '3' ) {
+
+			selectTool( 'erase' );
+
+		}
+
+	} );
+
+	window.addEventListener( 'keyup', ( e ) => {
+
+		if ( e.key === ' ' ) {
+
+			spaceDown = false;
+			if ( ! isPanning ) renderer.domElement.style.cursor = '';
+
+		}
+
+	} );
+
+	// ─── Init & render loop ───────────────────────────────────
+
+	await loadModels();
+	loadSaved();
+
+	// Start with a finish cell if the grid is empty
+	if ( grid.size === 0 ) {
+
+		placeRoad( 0, 0, true );
+
+	}
+
+	function animate() {
+
+		requestAnimationFrame( animate );
+		renderer.render( scene, camera );
+
+	}
+
+	animate();
+
+	</script>
+</body>
+</html>

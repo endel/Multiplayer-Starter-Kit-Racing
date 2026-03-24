@@ -1,8 +1,6 @@
 import * as THREE from 'three';
 import { rigidBody } from 'crashcat';
 
-const _raycaster = new THREE.Raycaster();
-const _down = new THREE.Vector3( 0, -1, 0 );
 const _tmpVec = new THREE.Vector3();
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
@@ -95,16 +93,9 @@ export class Vehicle {
 
 	}
 
-	update( dt, controlsInput, collisionMeshes ) {
+	update( dt, controlsInput ) {
 
-		_raycaster.set(
-			new THREE.Vector3( this.spherePos.x, this.spherePos.y + 1, this.spherePos.z ),
-			_down
-		);
-		_raycaster.far = 3;
-
-		const hits = _raycaster.intersectObjects( collisionMeshes, false );
-		const isGrounded = hits.length > 0;
+		const isGrounded = true;
 
 		if ( isGrounded ) {
 
@@ -125,8 +116,6 @@ export class Vehicle {
 
 		if ( isGrounded ) {
 
-			const hit = hits[ 0 ];
-
 			if ( ! this.colliding ) {
 
 				if ( this.bodyNode ) this.bodyNode.position.set( 0, 0.1, 0 );
@@ -134,8 +123,7 @@ export class Vehicle {
 
 			}
 
-			const normalMatrix = new THREE.Matrix3().getNormalMatrix( hit.object.matrixWorld );
-			this.normal.copy( hit.face.normal ).applyMatrix3( normalMatrix ).normalize();
+			this.normal.set( 0, 1, 0 );
 
 			_tmpVec.set( 0, 1, 0 ).applyQuaternion( this.container.quaternion );
 

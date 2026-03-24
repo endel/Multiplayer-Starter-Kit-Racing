@@ -14,7 +14,7 @@ function addDebugBox( group, halfExtents, position, quaternion ) {
 
 }
 
-export function buildWallColliders( world, debugGroup ) {
+export function buildWallColliders( world, debugGroup, customCells ) {
 
 	const S = GRID_SCALE;
 	const CELL_HALF = CELL_RAW / 2;
@@ -67,7 +67,9 @@ export function buildWallColliders( world, debugGroup ) {
 
 	}
 
-	for ( const [ gx, gz, key, orient ] of TRACK_CELLS ) {
+	const cells = customCells || TRACK_CELLS;
+
+	for ( const [ gx, gz, key, orient ] of cells ) {
 
 		if ( key === 'track-bump' ) continue;
 
@@ -118,13 +120,13 @@ export function buildWallColliders( world, debugGroup ) {
 
 }
 
-export function createSphereBody( world ) {
+export function createSphereBody( world, spawnPos ) {
 
 	const body = rigidBody.create( world, {
 		shape: sphere.create( { radius: 0.5 } ),
 		motionType: MotionType.DYNAMIC,
 		objectLayer: world._OL_MOVING,
-		position: [ 3.5, 0.5, 5 ],
+		position: spawnPos || [ 3.5, 0.5, 5 ],
 		mass: 1000.0,
 		friction: 5.0,
 		restitution: 0.1,
