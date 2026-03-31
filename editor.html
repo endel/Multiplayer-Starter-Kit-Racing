@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+	<title>Track Editor</title>
+	<style>
+		* { box-sizing: border-box; }
+		body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+		canvas { display: block; touch-action: none; }
+
+		#toolbar {
+			position: absolute;
+			bottom: 20px;
+			left: 50%;
+			transform: translateX(-50%);
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 8px 10px;
+			background: rgba(20, 20, 30, 0.85);
+			backdrop-filter: blur(12px);
+			-webkit-backdrop-filter: blur(12px);
+			border-radius: 14px;
+			border: 1px solid rgba(255, 255, 255, 0.1);
+			box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+			z-index: 10;
+		}
+
+		#toolbar button {
+			padding: 8px 16px;
+			border: none;
+			border-radius: 8px;
+			background: transparent;
+			color: rgba(255, 255, 255, 0.65);
+			font-size: 13px;
+			font-weight: 500;
+			cursor: pointer;
+			transition: all 0.15s;
+			white-space: nowrap;
+		}
+		#toolbar button:hover {
+			background: rgba(255, 255, 255, 0.1);
+			color: #fff;
+		}
+		#toolbar button.active {
+			background: rgba(255, 255, 255, 0.18);
+			color: #fff;
+		}
+
+		.separator {
+			width: 1px;
+			height: 24px;
+			background: rgba(255, 255, 255, 0.15);
+			margin: 0 2px;
+			flex-shrink: 0;
+		}
+
+		#toolbar button.action {
+			background: rgba(80, 180, 80, 0.25);
+			color: rgba(140, 255, 140, 0.9);
+		}
+		#toolbar button.action:hover {
+			background: rgba(80, 180, 80, 0.4);
+			color: #fff;
+		}
+
+		#toolbar button.danger {
+			color: rgba(255, 255, 255, 0.45);
+		}
+		#toolbar button.danger:hover {
+			background: rgba(220, 80, 80, 0.25);
+			color: rgba(255, 140, 140, 0.9);
+		}
+
+		#toast {
+			position: absolute;
+			bottom: 90px;
+			left: 50%;
+			transform: translateX(-50%);
+			padding: 10px 24px;
+			background: rgba(20, 20, 30, 0.85);
+			backdrop-filter: blur(12px);
+			-webkit-backdrop-filter: blur(12px);
+			color: #fff;
+			border-radius: 10px;
+			border: 1px solid rgba(255, 255, 255, 0.1);
+			font-size: 13px;
+			opacity: 0;
+			transition: opacity 0.3s;
+			pointer-events: none;
+			z-index: 20;
+		}
+		#toast.show { opacity: 1; }
+
+	</style>
+  <script type="module" crossorigin src="/assets/editor-BJ188hev.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/Track-CrxqkQ4C.js">
+</head>
+<body>
+	<div id="toolbar">
+		<button id="btn-road" class="active">Road</button>
+		<button id="btn-erase">Erase</button>
+		<div class="separator"></div>
+		<button id="btn-play" class="action">Play</button>
+		<button id="btn-share" class="action">Share</button>
+		<div class="separator"></div>
+		<button id="btn-clear" class="danger">Clear</button>
+	</div>
+
+	<div id="toast"></div>
+
+</body>
+</html>
